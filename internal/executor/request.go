@@ -74,7 +74,7 @@ func BuildRequestInput(storageJSON []byte, metadata map[string]any, attributes m
 
 func geminiCLIRequestBody(model string, payload []byte) []byte {
 	if gjson.GetBytes(payload, "request").Exists() {
-		return append([]byte(nil), payload...)
+		return compat.NormalizeRequest(append([]byte(nil), payload...))
 	}
 	return compat.WrapRequest(model, payload)
 }

@@ -71,6 +71,38 @@ func TestBuildRequestInputWrapsGeminiPayload(t *testing.T) {
 	}
 }
 
+func TestBuildRequestInputNormalizesWrappedFunctionResponses(t *testing.T) {
+	payload := []byte(`{
+		"project":"old-project",
+		"model":"old-model",
+		"request":{
+			"contents":[
+				{"role":"model","parts":[{"functionCall":{"name":"exec_command","id":"call_1","args":{"cmd":"date"}},"thoughtSignature":"skip_thought_signature_validator"}]},
+				{"role":"function","parts":[{"functionResponse":{"name":"exec_command","id":"call_1","response":{"result":"ok"}}}]}
+			]
+		}
+	}`)
+
+	built, errBuild := BuildRequestInput(
+		[]byte(`{"type":"gemini-cli","access_token":"access-token","project_id":"project-id"}`),
+		nil,
+		nil,
+		"gemini-2.5-pro",
+		payload,
+		"streamGenerateContent",
+		"",
+	)
+	if errBuild != nil {
+		t.Fatalf("BuildRequestInput returned error: %v", errBuild)
+	}
+	if got := gjson.GetBytes(built.Body, "request.contents.1.role").String(); got != "user" {
+		t.Fatalf("functionResponse role = %q, want user: %s", got, built.Body)
+	}
+	if !gjson.GetBytes(built.Body, "request.contents.1.parts.0.functionResponse").Exists() {
+		t.Fatalf("functionResponse missing: %s", built.Body)
+	}
+}
+
 func TestBuildRequestInputConvertsGemini25ThinkingLevelToBudget(t *testing.T) {
 	built, errBuild := BuildRequestInput(
 		[]byte(`{"type":"gemini-cli","access_token":"access-token","project_id":"project-id"}`),

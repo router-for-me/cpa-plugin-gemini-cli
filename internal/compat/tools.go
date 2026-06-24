@@ -181,7 +181,7 @@ func flushFunctionResponses(out []byte, responses []gjson.Result, groups []*func
 }
 
 func appendFunctionResponseContent(out []byte, responses []gjson.Result, callNames []string) []byte {
-	content := []byte(`{"role":"function","parts":[]}`)
+	content := []byte(`{"role":"user","parts":[]}`)
 	for idx, response := range responses {
 		raw := []byte(response.Raw)
 		if strings.TrimSpace(gjson.GetBytes(raw, "functionResponse.name").String()) == "" && idx < len(callNames) {

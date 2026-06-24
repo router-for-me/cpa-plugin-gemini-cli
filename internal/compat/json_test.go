@@ -83,8 +83,8 @@ func TestWrapRequestNormalizesToolsAndThoughtSignatures(t *testing.T) {
 	if got := gjson.GetBytes(wrapped, "request.contents.0.parts.0.thoughtSignature").String(); got != "nested-signature" {
 		t.Fatalf("thoughtSignature = %q, want nested-signature", got)
 	}
-	if got := gjson.GetBytes(wrapped, "request.contents.1.role").String(); got != "function" {
-		t.Fatalf("response role = %q, want function", got)
+	if got := gjson.GetBytes(wrapped, "request.contents.1.role").String(); got != "user" {
+		t.Fatalf("response role = %q, want user", got)
 	}
 	if got := gjson.GetBytes(wrapped, "request.contents.1.parts.0.functionResponse.name").String(); got != "_1_bad_name_" {
 		t.Fatalf("functionResponse name = %q, want _1_bad_name_", got)
