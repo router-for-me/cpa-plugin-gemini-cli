@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -35,6 +36,7 @@ const (
 	codeAssistBaseURL = "https://cloudcode-pa.googleapis.com"
 	codeAssistVersion = "v1internal"
 	loginTimeout      = 3 * time.Minute
+	manualPromptDelay = 15 * time.Second
 	pollInterval      = 2 * time.Second
 	onboardingTimeout = 30 * time.Second
 	onboardingPoll    = 2 * time.Second
@@ -201,6 +203,11 @@ func (p *Provider) runLocalLogin(ctx context.Context, proxyURL string, projectID
 
 	timer := time.NewTimer(loginTimeout)
 	defer timer.Stop()
+	manualPromptTimer := time.NewTimer(manualPromptDelay)
+	defer manualPromptTimer.Stop()
+	manualPromptC := manualPromptTimer.C
+	var manualInputCh <-chan string
+	var manualInputErrCh <-chan error
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	for {
@@ -210,31 +217,59 @@ func (p *Provider) runLocalLogin(ctx context.Context, proxyURL string, projectID
 		case <-timer.C:
 			return nil, stdout, fmt.Errorf("OAuth login timed out")
 		case payload := <-codeCh:
-			if payload.Error != "" {
-				return nil, stdout, fmt.Errorf("OAuth callback failed: %s", payload.Error)
+			return p.finishLocalLogin(ctx, proxyURL, redirectURI, verifier, projectID, state, payload, stdout)
+		case <-manualPromptC:
+			manualPromptC = nil
+			if manualPromptTimer != nil {
+				manualPromptTimer.Stop()
 			}
-			if payload.State != state {
-				return nil, stdout, fmt.Errorf("OAuth state mismatch")
+			select {
+			case payload := <-codeCh:
+				return p.finishLocalLogin(ctx, proxyURL, redirectURI, verifier, projectID, state, payload, stdout)
+			default:
 			}
-			client := fallbackHTTPClient(proxyURL)
-			hostClient := pluginapi.HostHTTPClient(fallbackClient{client: client})
-			metadata := map[string]any{"redirect_uri": redirectURI, "code_verifier": verifier}
-			if projectID != "" {
-				metadata["project_id"] = projectID
+			manualInputCh, manualInputErrCh = asyncPrompt("Paste the Gemini callback URL (or press Enter to keep waiting): ")
+		case input := <-manualInputCh:
+			manualInputCh = nil
+			manualInputErrCh = nil
+			payload, okPayload, errParse := parseManualCallbackPayload(input)
+			if errParse != nil {
+				return nil, stdout, errParse
 			}
-			storage, errFinalize := p.finalizeCode(ctx, hostClient, payload.Code, metadata)
-			if errFinalize != nil {
-				return nil, stdout, errFinalize
+			if !okPayload {
+				continue
 			}
-			auths, errBuild := buildPersistentAuths("", *storage)
-			if errBuild != nil {
-				return nil, stdout, errBuild
-			}
-			stdout = append(stdout, []byte("Authentication successful.\n")...)
-			return auths, stdout, nil
+			return p.finishLocalLogin(ctx, proxyURL, redirectURI, verifier, projectID, state, payload, stdout)
+		case errManual := <-manualInputErrCh:
+			return nil, stdout, errManual
 		case <-ticker.C:
 		}
 	}
+}
+
+func (p *Provider) finishLocalLogin(ctx context.Context, proxyURL string, redirectURI string, verifier string, projectID string, state string, payload callbackPayload, stdout []byte) ([]pluginapi.AuthData, []byte, error) {
+	if payload.Error != "" {
+		return nil, stdout, fmt.Errorf("OAuth callback failed: %s", payload.Error)
+	}
+	if payload.State != state {
+		return nil, stdout, fmt.Errorf("OAuth state mismatch")
+	}
+	client := fallbackHTTPClient(proxyURL)
+	hostClient := pluginapi.HostHTTPClient(fallbackClient{client: client})
+	metadata := map[string]any{"redirect_uri": redirectURI, "code_verifier": verifier}
+	if projectID != "" {
+		metadata["project_id"] = projectID
+	}
+	storage, errFinalize := p.finalizeCode(ctx, hostClient, payload.Code, metadata)
+	if errFinalize != nil {
+		return nil, stdout, errFinalize
+	}
+	auths, errBuild := buildPersistentAuths("", *storage)
+	if errBuild != nil {
+		return nil, stdout, errBuild
+	}
+	stdout = append(stdout, []byte("Authentication successful.\n")...)
+	return auths, stdout, nil
 }
 
 func (p *Provider) finalizeCode(ctx context.Context, client pluginapi.HostHTTPClient, code string, metadata map[string]any) (*Storage, error) {
@@ -658,6 +693,84 @@ func randomURLToken(size int) (string, error) {
 		return "", errRead
 	}
 	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+func asyncPrompt(message string) (<-chan string, <-chan error) {
+	inputCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		if _, errWrite := os.Stdout.Write([]byte(message)); errWrite != nil {
+			errCh <- errWrite
+			return
+		}
+		input, errRead := bufio.NewReader(os.Stdin).ReadString('\n')
+		if errRead != nil && input == "" {
+			errCh <- errRead
+			return
+		}
+		inputCh <- input
+	}()
+	return inputCh, errCh
+}
+
+func parseManualCallbackPayload(input string) (callbackPayload, bool, error) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return callbackPayload{}, false, nil
+	}
+
+	candidate := trimmed
+	if !strings.Contains(candidate, "://") {
+		switch {
+		case strings.HasPrefix(candidate, "?"):
+			candidate = "http://localhost" + candidate
+		case strings.ContainsAny(candidate, "/?#") || strings.Contains(candidate, ":"):
+			candidate = "http://" + candidate
+		case strings.Contains(candidate, "="):
+			candidate = "http://localhost/?" + candidate
+		default:
+			return callbackPayload{}, false, fmt.Errorf("invalid callback URL")
+		}
+	}
+
+	parsedURL, errParse := url.Parse(candidate)
+	if errParse != nil {
+		return callbackPayload{}, false, errParse
+	}
+
+	query := parsedURL.Query()
+	code := strings.TrimSpace(query.Get("code"))
+	state := strings.TrimSpace(query.Get("state"))
+	errCode := strings.TrimSpace(query.Get("error"))
+	errDesc := strings.TrimSpace(query.Get("error_description"))
+	if parsedURL.Fragment != "" {
+		if fragQuery, errFrag := url.ParseQuery(parsedURL.Fragment); errFrag == nil {
+			if code == "" {
+				code = strings.TrimSpace(fragQuery.Get("code"))
+			}
+			if state == "" {
+				state = strings.TrimSpace(fragQuery.Get("state"))
+			}
+			if errCode == "" {
+				errCode = strings.TrimSpace(fragQuery.Get("error"))
+			}
+			if errDesc == "" {
+				errDesc = strings.TrimSpace(fragQuery.Get("error_description"))
+			}
+		}
+	}
+	if code != "" && state == "" && strings.Contains(code, "#") {
+		parts := strings.SplitN(code, "#", 2)
+		code = parts[0]
+		state = parts[1]
+	}
+	if errCode == "" && errDesc != "" {
+		errCode = errDesc
+	}
+	if code == "" && errCode == "" {
+		return callbackPayload{}, false, fmt.Errorf("callback URL missing code")
+	}
+	return callbackPayload{Code: code, State: state, Error: errCode}, true, nil
 }
 
 func metadataString(metadata map[string]any, key string) string {

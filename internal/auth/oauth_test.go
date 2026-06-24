@@ -46,6 +46,79 @@ func TestFlagBoolValueReadsNativeHostFlag(t *testing.T) {
 	}
 }
 
+func TestParseManualCallbackPayload(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantOK    bool
+		wantCode  string
+		wantState string
+		wantError bool
+	}{
+		{
+			name:      "full callback URL",
+			input:     "http://127.0.0.1:12345/oauth2callback?code=auth-code&state=state-token",
+			wantOK:    true,
+			wantCode:  "auth-code",
+			wantState: "state-token",
+		},
+		{
+			name:      "query string",
+			input:     "code=auth-code&state=state-token",
+			wantOK:    true,
+			wantCode:  "auth-code",
+			wantState: "state-token",
+		},
+		{
+			name:      "leading question mark",
+			input:     "?code=auth-code&state=state-token",
+			wantOK:    true,
+			wantCode:  "auth-code",
+			wantState: "state-token",
+		},
+		{
+			name:      "fragment callback",
+			input:     "http://localhost/oauth2callback#code=auth-code&state=state-token",
+			wantOK:    true,
+			wantCode:  "auth-code",
+			wantState: "state-token",
+		},
+		{
+			name:   "empty input keeps waiting",
+			input:  "",
+			wantOK: false,
+		},
+		{
+			name:      "missing code",
+			input:     "http://localhost/oauth2callback?state=state-token",
+			wantError: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, okPayload, errParse := parseManualCallbackPayload(tt.input)
+			if tt.wantError {
+				if errParse == nil {
+					t.Fatal("parseManualCallbackPayload returned nil error")
+				}
+				return
+			}
+			if errParse != nil {
+				t.Fatalf("parseManualCallbackPayload returned error: %v", errParse)
+			}
+			if okPayload != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", okPayload, tt.wantOK)
+			}
+			if payload.Code != tt.wantCode {
+				t.Fatalf("code = %q, want %q", payload.Code, tt.wantCode)
+			}
+			if payload.State != tt.wantState {
+				t.Fatalf("state = %q, want %q", payload.State, tt.wantState)
+			}
+		})
+	}
+}
+
 func TestFallbackHTTPClientUsesHostProxySemantics(t *testing.T) {
 	proxyClient := fallbackHTTPClient("http://proxy.example.com:8080")
 	proxyTransport, ok := proxyClient.Transport.(*http.Transport)
