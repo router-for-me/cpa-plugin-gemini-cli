@@ -71,6 +71,36 @@ func TestBuildRequestInputWrapsGeminiPayload(t *testing.T) {
 	}
 }
 
+func TestBuildRequestInputConvertsGemini25ThinkingLevelToBudget(t *testing.T) {
+	built, errBuild := BuildRequestInput(
+		[]byte(`{"type":"gemini-cli","access_token":"access-token","project_id":"project-id"}`),
+		nil,
+		nil,
+		"gemini-2.5-flash-lite",
+		[]byte(`{"request":{"generationConfig":{"thinkingConfig":{"thinking_level":"xhigh","include_thoughts":true}}}}`),
+		"generateContent",
+		"",
+	)
+	if errBuild != nil {
+		t.Fatalf("BuildRequestInput returned error: %v", errBuild)
+	}
+	if gjson.GetBytes(built.Body, "request.generationConfig.thinkingConfig.thinkingLevel").Exists() {
+		t.Fatalf("thinkingLevel was not removed: %s", built.Body)
+	}
+	if gjson.GetBytes(built.Body, "request.generationConfig.thinkingConfig.thinking_level").Exists() {
+		t.Fatalf("thinking_level was not removed: %s", built.Body)
+	}
+	if got := gjson.GetBytes(built.Body, "request.generationConfig.thinkingConfig.thinkingBudget").Int(); got != 24576 {
+		t.Fatalf("thinkingBudget = %d, want 24576", got)
+	}
+	if !gjson.GetBytes(built.Body, "request.generationConfig.thinkingConfig.includeThoughts").Bool() {
+		t.Fatalf("includeThoughts was not preserved: %s", built.Body)
+	}
+	if gjson.GetBytes(built.Body, "request.generationConfig.thinkingConfig.include_thoughts").Exists() {
+		t.Fatalf("include_thoughts was not removed: %s", built.Body)
+	}
+}
+
 func TestBuildRequestInputStreamDefaultsToSSE(t *testing.T) {
 	built, errBuild := BuildRequestInput([]byte(`{"type":"gemini-cli","access_token":"access-token","project_id":"project-id"}`), nil, nil, "gemini-2.5-pro", []byte(`{"request":{}}`), "streamGenerateContent", "")
 	if errBuild != nil {

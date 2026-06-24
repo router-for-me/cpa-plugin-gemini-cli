@@ -26,9 +26,9 @@ func staticModels() []pluginapi.ModelInfo {
 		output      int64
 		thinking    *pluginapi.ThinkingSupport
 	}{
-		{"gemini-2.5-pro", "Gemini 2.5 Pro", 1048576, 65536, defaultThinking()},
-		{"gemini-2.5-flash", "Gemini 2.5 Flash", 1048576, 65536, defaultThinking()},
-		{"gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite", 1048576, 65536, defaultThinking()},
+		{"gemini-2.5-pro", "Gemini 2.5 Pro", 1048576, 65536, gemini25ProThinking()},
+		{"gemini-2.5-flash", "Gemini 2.5 Flash", 1048576, 65536, gemini25FlashThinking()},
+		{"gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite", 1048576, 65536, gemini25FlashThinking()},
 		{"gemini-3-pro-preview", "Gemini 3 Pro Preview", 1048576, 65536, defaultThinking()},
 		{"gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", 1048576, 65536, defaultThinking()},
 		{"gemini-3-flash-preview", "Gemini 3 Flash Preview", 1048576, 65536, defaultThinking()},
@@ -66,6 +66,22 @@ func defaultThinking() *pluginapi.ThinkingSupport {
 		ZeroAllowed:    true,
 		DynamicAllowed: true,
 		Levels:         []string{"none", "auto", "low", "medium", "high", "xhigh"},
+	}
+}
+
+func gemini25ProThinking() *pluginapi.ThinkingSupport {
+	return &pluginapi.ThinkingSupport{
+		Min:            128,
+		Max:            32768,
+		DynamicAllowed: true,
+	}
+}
+
+func gemini25FlashThinking() *pluginapi.ThinkingSupport {
+	return &pluginapi.ThinkingSupport{
+		Max:            24576,
+		ZeroAllowed:    true,
+		DynamicAllowed: true,
 	}
 }
 

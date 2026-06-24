@@ -26,19 +26,29 @@ func TestStaticModelsIncludeExpectedGeminiCLIMetadata(t *testing.T) {
 	if model.Thinking == nil {
 		t.Fatal("gemini-2.5-pro thinking support is nil")
 	}
-	if model.Thinking.Max != 65536 {
-		t.Fatalf("thinking max = %d, want 65536", model.Thinking.Max)
+	if model.Thinking.Min != 128 {
+		t.Fatalf("thinking min = %d, want 128", model.Thinking.Min)
 	}
-	if !containsLevel(model.Thinking.Levels, "xhigh") {
-		t.Fatalf("thinking levels = %#v, want xhigh", model.Thinking.Levels)
+	if model.Thinking.Max != 32768 {
+		t.Fatalf("thinking max = %d, want 32768", model.Thinking.Max)
 	}
-}
-
-func containsLevel(levels []string, want string) bool {
-	for _, level := range levels {
-		if level == want {
-			return true
-		}
+	if len(model.Thinking.Levels) != 0 {
+		t.Fatalf("thinking levels = %#v, want empty", model.Thinking.Levels)
 	}
-	return false
+	model, ok = byID["gemini-2.5-flash-lite"]
+	if !ok {
+		t.Fatalf("gemini-2.5-flash-lite missing from models: %#v", byID)
+	}
+	if model.Thinking == nil {
+		t.Fatal("gemini-2.5-flash-lite thinking support is nil")
+	}
+	if model.Thinking.Max != 24576 {
+		t.Fatalf("flash-lite thinking max = %d, want 24576", model.Thinking.Max)
+	}
+	if !model.Thinking.ZeroAllowed {
+		t.Fatal("flash-lite thinking zero_allowed = false, want true")
+	}
+	if len(model.Thinking.Levels) != 0 {
+		t.Fatalf("flash-lite thinking levels = %#v, want empty", model.Thinking.Levels)
+	}
 }

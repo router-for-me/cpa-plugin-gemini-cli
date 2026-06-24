@@ -35,6 +35,7 @@ func BuildRequestInput(storageJSON []byte, metadata map[string]any, attributes m
 	}
 	projectID := projectIDFromAuth(metadata, attributes, storage)
 	body := geminiCLIRequestBody(model, payload)
+	body = normalizeGemini25Thinking(body, model)
 	if action == "countTokens" {
 		body = deletePath(body, "project")
 		body = deletePath(body, "model")
@@ -163,6 +164,126 @@ func setString(body []byte, path string, value string) []byte {
 func deletePath(body []byte, path string) []byte {
 	updated, errDelete := sjson.DeleteBytes(body, path)
 	if errDelete != nil {
+		return body
+	}
+	return updated
+}
+
+func normalizeGemini25Thinking(body []byte, model string) []byte {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	}
+	maxBudget, zeroAllowed, ok := gemini25ThinkingLimits(model)
+	if !ok {
+		return body
+	}
+
+	path := "request.generationConfig.thinkingConfig"
+	if !gjson.GetBytes(body, path).Exists() {
+		return body
+	}
+
+	level := strings.TrimSpace(gjson.GetBytes(body, path+".thinkingLevel").String())
+	if level == "" {
+		level = strings.TrimSpace(gjson.GetBytes(body, path+".thinking_level").String())
+	}
+	modeNone := false
+	if level != "" {
+		budget, okConvert := thinkingLevelBudget(level)
+		if !okConvert {
+			return body
+		}
+		modeNone = strings.EqualFold(level, "none")
+		body = setInt(body, path+".thinkingBudget", clampGemini25Budget(budget, maxBudget, zeroAllowed))
+	} else if budget := gjson.GetBytes(body, path+".thinkingBudget"); budget.Exists() {
+		body = setInt(body, path+".thinkingBudget", clampGemini25Budget(int(budget.Int()), maxBudget, zeroAllowed))
+	} else if budget := gjson.GetBytes(body, path+".thinking_budget"); budget.Exists() {
+		body = setInt(body, path+".thinkingBudget", clampGemini25Budget(int(budget.Int()), maxBudget, zeroAllowed))
+	}
+
+	if includeThoughts := gjson.GetBytes(body, path+".include_thoughts"); includeThoughts.Exists() && !gjson.GetBytes(body, path+".includeThoughts").Exists() {
+		body = setBool(body, path+".includeThoughts", includeThoughts.Bool())
+	}
+	if modeNone {
+		body = setBool(body, path+".includeThoughts", false)
+	}
+
+	body = deletePath(body, path+".thinkingLevel")
+	body = deletePath(body, path+".thinking_level")
+	body = deletePath(body, path+".thinking_budget")
+	body = deletePath(body, path+".include_thoughts")
+	return body
+}
+
+func gemini25ThinkingLimits(model string) (maxBudget int, zeroAllowed bool, ok bool) {
+	baseModel := strings.ToLower(strings.TrimSpace(model))
+	if idx := strings.Index(baseModel, "("); idx >= 0 {
+		baseModel = strings.TrimSpace(baseModel[:idx])
+	}
+	switch baseModel {
+	case "gemini-2.5-pro":
+		return 32768, false, true
+	case "gemini-2.5-flash", "gemini-2.5-flash-lite":
+		return 24576, true, true
+	default:
+		return 0, false, false
+	}
+}
+
+func thinkingLevelBudget(level string) (int, bool) {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "none":
+		return 0, true
+	case "auto":
+		return -1, true
+	case "minimal":
+		return 512, true
+	case "low":
+		return 1024, true
+	case "medium":
+		return 8192, true
+	case "high":
+		return 24576, true
+	case "xhigh":
+		return 32768, true
+	case "max":
+		return 128000, true
+	default:
+		return 0, false
+	}
+}
+
+func clampGemini25Budget(budget int, maxBudget int, zeroAllowed bool) int {
+	if budget == -1 {
+		return budget
+	}
+	if budget == 0 {
+		if zeroAllowed {
+			return 0
+		}
+		return 128
+	}
+	if budget < 128 {
+		return 128
+	}
+	if maxBudget > 0 && budget > maxBudget {
+		return maxBudget
+	}
+	return budget
+}
+
+func setInt(body []byte, path string, value int) []byte {
+	updated, errSet := sjson.SetBytes(body, path, value)
+	if errSet != nil {
+		return body
+	}
+	return updated
+}
+
+func setBool(body []byte, path string, value bool) []byte {
+	updated, errSet := sjson.SetBytes(body, path, value)
+	if errSet != nil {
 		return body
 	}
 	return updated

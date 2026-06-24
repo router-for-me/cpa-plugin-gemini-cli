@@ -54,3 +54,54 @@ func TestApplyThinkingLevelSetsLevel(t *testing.T) {
 		t.Fatalf("thinkingLevel = %q, want high", got)
 	}
 }
+
+func TestApplyThinkingLevelUsesBudgetForGemini25(t *testing.T) {
+	resp, errApply := NewApplier().ApplyThinking(context.Background(), pluginapi.ThinkingApplyRequest{
+		Model: pluginapi.ModelInfo{
+			ID: "gemini-2.5-pro",
+			Thinking: &pluginapi.ThinkingSupport{
+				Min:            128,
+				Max:            32768,
+				DynamicAllowed: true,
+			},
+		},
+		Config: pluginapi.ThinkingConfig{Mode: "level", Level: "HIGH"},
+		Body:   []byte(`{"request":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"low","thinking_budget":1024}}}}`),
+	})
+	if errApply != nil {
+		t.Fatalf("ApplyThinking returned error: %v", errApply)
+	}
+	if gjson.GetBytes(resp.Body, "request.generationConfig.thinkingConfig.thinkingLevel").Exists() {
+		t.Fatalf("thinkingLevel was not removed: %s", resp.Body)
+	}
+	if gjson.GetBytes(resp.Body, "request.generationConfig.thinkingConfig.thinking_level").Exists() {
+		t.Fatalf("thinking_level was not removed: %s", resp.Body)
+	}
+	if got := gjson.GetBytes(resp.Body, "request.generationConfig.thinkingConfig.thinkingBudget").Int(); got != 24576 {
+		t.Fatalf("thinkingBudget = %d, want 24576", got)
+	}
+}
+
+func TestApplyThinkingLevelClampsBudgetForGemini25FlashLite(t *testing.T) {
+	resp, errApply := NewApplier().ApplyThinking(context.Background(), pluginapi.ThinkingApplyRequest{
+		Model: pluginapi.ModelInfo{
+			ID: "gemini-2.5-flash-lite",
+			Thinking: &pluginapi.ThinkingSupport{
+				Max:            24576,
+				ZeroAllowed:    true,
+				DynamicAllowed: true,
+			},
+		},
+		Config: pluginapi.ThinkingConfig{Mode: "level", Level: "xhigh"},
+		Body:   []byte(`{"request":{"generationConfig":{}}}`),
+	})
+	if errApply != nil {
+		t.Fatalf("ApplyThinking returned error: %v", errApply)
+	}
+	if got := gjson.GetBytes(resp.Body, "request.generationConfig.thinkingConfig.thinkingBudget").Int(); got != 24576 {
+		t.Fatalf("thinkingBudget = %d, want 24576", got)
+	}
+	if gjson.GetBytes(resp.Body, "request.generationConfig.thinkingConfig.thinkingLevel").Exists() {
+		t.Fatalf("thinkingLevel was not removed: %s", resp.Body)
+	}
+}
