@@ -118,7 +118,7 @@ func (p *Provider) PollLogin(ctx context.Context, req pluginapi.AuthLoginPollReq
 	if errFinalize != nil {
 		return pluginapi.AuthLoginPollResponse{Status: pluginapi.AuthLoginStatusError, Message: errFinalize.Error()}, nil
 	}
-	auths, errBuild := BuildAuths("", *storage)
+	auths, errBuild := buildPersistentAuths("", *storage)
 	if errBuild != nil {
 		return pluginapi.AuthLoginPollResponse{Status: pluginapi.AuthLoginStatusError, Message: errBuild.Error()}, nil
 	}
@@ -133,7 +133,6 @@ func (p *Provider) RegisterCommandLine(context.Context, pluginapi.CommandLineReg
 	return pluginapi.CommandLineRegistrationResponse{
 		Flags: []pluginapi.CommandLineFlag{
 			{Name: "geminicli-login", Usage: "Run Gemini CLI OAuth login.", Type: "bool", DefaultValue: "false"},
-			{Name: "geminicli-no-browser", Usage: "Print the Gemini CLI OAuth URL without opening a browser.", Type: "bool", DefaultValue: "false"},
 			{Name: "geminicli-project-id", Usage: "Default Google Cloud project ID for Gemini CLI auth.", Type: "string"},
 		},
 	}, nil
@@ -143,7 +142,7 @@ func (p *Provider) ExecuteCommandLine(ctx context.Context, req pluginapi.Command
 	if !flagBool(req.TriggeredFlags, "geminicli-login") {
 		return pluginapi.CommandLineExecutionResponse{}, nil
 	}
-	noBrowser := flagBool(req.Flags, "geminicli-no-browser")
+	noBrowser := flagBoolValue(req.Flags, "no-browser")
 	projectID := flagString(req.Flags, "geminicli-project-id")
 	auths, stdout, errLogin := p.runLocalLogin(ctx, req.Host.ProxyURL, projectID, noBrowser)
 	if errLogin != nil {
@@ -193,10 +192,12 @@ func (p *Provider) runLocalLogin(ctx context.Context, proxyURL string, projectID
 		oauth2.SetAuthURLParam("code_challenge", challenge),
 		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
 	)
-	stdout := []byte("Open this URL to authenticate Gemini CLI:\n\n" + authURL + "\n\n")
+	prompt := []byte("Open this URL to authenticate Gemini CLI:\n\n" + authURL + "\n\n")
+	_, _ = os.Stdout.Write(prompt)
 	if !noBrowser {
 		_ = openBrowser(authURL)
 	}
+	var stdout []byte
 
 	timer := time.NewTimer(loginTimeout)
 	defer timer.Stop()
@@ -225,7 +226,7 @@ func (p *Provider) runLocalLogin(ctx context.Context, proxyURL string, projectID
 			if errFinalize != nil {
 				return nil, stdout, errFinalize
 			}
-			auths, errBuild := BuildAuths("", *storage)
+			auths, errBuild := buildPersistentAuths("", *storage)
 			if errBuild != nil {
 				return nil, stdout, errBuild
 			}
@@ -669,6 +670,14 @@ func flagBool(flags map[string]pluginapi.CommandLineFlagValue, name string) bool
 		return false
 	}
 	return value.Set && strings.EqualFold(strings.TrimSpace(value.Value), "true")
+}
+
+func flagBoolValue(flags map[string]pluginapi.CommandLineFlagValue, name string) bool {
+	value, ok := flags[name]
+	if !ok {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(value.Value), "true")
 }
 
 func flagString(flags map[string]pluginapi.CommandLineFlagValue, name string) string {

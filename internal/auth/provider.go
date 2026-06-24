@@ -166,6 +166,17 @@ func BuildAuths(fileName string, storage Storage) ([]pluginapi.AuthData, error) 
 	return auths, nil
 }
 
+func buildPersistentAuths(fileName string, storage Storage) ([]pluginapi.AuthData, error) {
+	auths, errBuild := BuildAuths(fileName, storage)
+	if errBuild != nil {
+		return nil, errBuild
+	}
+	if len(auths) == 0 {
+		return nil, nil
+	}
+	return []pluginapi.AuthData{auths[0]}, nil
+}
+
 func authDataFromStorage(id string, fileName string, storage Storage, virtual bool, parentID string) pluginapi.AuthData {
 	raw := storage.RawJSON()
 	metadata := cloneAnyMap(storage.Raw)

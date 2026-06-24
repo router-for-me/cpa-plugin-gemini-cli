@@ -15,10 +15,9 @@ This plugin adds Gemini CLI upstream provider support to CLIProxyAPI through the
 ## Command-Line Flags
 
 - `--geminicli-login`: starts an interactive Gemini CLI login.
-- `--geminicli-no-browser`: skips opening the browser automatically during command-line login.
 - `--geminicli-project-id`: sets the preferred project for the saved auth.
 
-OAuth login timeout and polling interval are fixed in code. Proxy handling comes from the host configuration; the plugin has no plugin-specific proxy option.
+Use the host `--no-browser` flag to skip opening the browser automatically during command-line login. OAuth login saves a single physical auth file; multiple projects are kept in `project_ids` and expanded as virtual auths when the file is loaded. OAuth login timeout and polling interval are fixed in code. Proxy handling comes from the host configuration; the plugin has no plugin-specific proxy option.
 
 ## Auth Storage
 

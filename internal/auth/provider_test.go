@@ -88,6 +88,38 @@ func TestBuildAuthsExpandsProjectIDsAsVirtualAuths(t *testing.T) {
 	}
 }
 
+func TestBuildPersistentAuthsKeepsOnlyPrimaryWithProjectIDs(t *testing.T) {
+	auths, errBuild := buildPersistentAuths("", Storage{
+		Type:         "gemini",
+		Email:        "user@example.com",
+		ProjectID:    "primary-project",
+		ProjectIDs:   []string{"primary-project", "secondary-project", "third-project"},
+		AccessToken:  "access-token",
+		RefreshToken: "refresh-token",
+	})
+	if errBuild != nil {
+		t.Fatalf("buildPersistentAuths returned error: %v", errBuild)
+	}
+	if len(auths) != 1 {
+		t.Fatalf("auth count = %d, want 1", len(auths))
+	}
+	auth := auths[0]
+	if auth.Metadata["virtual"] == true {
+		t.Fatalf("persistent auth metadata = %#v, want physical auth", auth.Metadata)
+	}
+	if auth.Attributes["runtime_only"] != "" {
+		t.Fatalf("runtime_only attribute = %q, want empty", auth.Attributes["runtime_only"])
+	}
+	var stored map[string]any
+	if errDecode := json.Unmarshal(auth.StorageJSON, &stored); errDecode != nil {
+		t.Fatalf("decode storage: %v", errDecode)
+	}
+	projects, okProjects := stored["project_ids"].([]any)
+	if !okProjects || len(projects) != 3 {
+		t.Fatalf("stored project_ids = %#v, want 3 project ids", stored["project_ids"])
+	}
+}
+
 func TestBuildAuthsUsesFirstProjectIDForPrimaryWhenMissing(t *testing.T) {
 	storage := Storage{
 		Type:         "gemini",

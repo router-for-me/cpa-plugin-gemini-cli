@@ -20,10 +20,29 @@ func TestRegisterCommandLineDeclaresLoginFlags(t *testing.T) {
 	for _, flag := range resp.Flags {
 		flags[flag.Name] = flag
 	}
-	for _, name := range []string{"geminicli-login", "geminicli-no-browser", "geminicli-project-id"} {
+	for _, name := range []string{"geminicli-login", "geminicli-project-id"} {
 		if _, ok := flags[name]; !ok {
 			t.Fatalf("missing command line flag %q in %#v", name, flags)
 		}
+	}
+	if _, ok := flags["geminicli-no-browser"]; ok {
+		t.Fatalf("unexpected command line flag %q in %#v", "geminicli-no-browser", flags)
+	}
+}
+
+func TestFlagBoolValueReadsNativeHostFlag(t *testing.T) {
+	flags := map[string]pluginapi.CommandLineFlagValue{
+		"no-browser": {
+			Name:  "no-browser",
+			Value: "true",
+			Set:   false,
+		},
+	}
+	if !flagBoolValue(flags, "no-browser") {
+		t.Fatal("flagBoolValue did not read host no-browser value")
+	}
+	if flagBool(flags, "no-browser") {
+		t.Fatal("flagBool treated unset host no-browser as a triggered plugin flag")
 	}
 }
 
