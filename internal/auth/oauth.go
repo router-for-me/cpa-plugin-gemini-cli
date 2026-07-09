@@ -303,6 +303,9 @@ func (p *Provider) finalizeCode(ctx context.Context, client pluginapi.HostHTTPCl
 		return nil, fmt.Errorf("gemini-cli project_id is required")
 	}
 	storage.ProjectIDs = ensureProjectID(storage.ProjectIDs, storage.ProjectID)
+	// Best-effort: enable EXPERIMENTAL release channel so preview models work immediately.
+	// Login still succeeds when this Google Cloud API call fails.
+	_ = configurePreviewChannels(ctx, client, storage.AccessToken, storage.ProjectIDs)
 	return &storage, nil
 }
 
