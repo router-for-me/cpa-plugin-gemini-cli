@@ -5,7 +5,7 @@ This plugin adds Gemini CLI upstream provider support to CLIProxyAPI through the
 ## Capabilities
 
 - Parses `gemini` and `gemini-cli` auth storage files.
-- Expands one physical auth file into multiple virtual auths when `project_ids` contains more than one Google Cloud project.
+- OAuth login discovers an account-managed or explicitly requested Code Assist project.
 - Supports host Web OAuth through the host `/v0/management/oauth-callback` flow.
 - Supports command-line login through `--geminicli-login`.
 - After a successful OAuth login, automatically enables the Gemini Code Assist `EXPERIMENTAL` release channel for saved project IDs so preview models are available.
@@ -18,7 +18,7 @@ This plugin adds Gemini CLI upstream provider support to CLIProxyAPI through the
 - `--geminicli-login`: starts an interactive Gemini CLI login.
 - `--geminicli-project-id`: sets the preferred project for the saved auth.
 
-Use the host `--no-browser` flag to skip opening the browser automatically during command-line login. After opening the login URL, the command can accept a pasted callback URL when the local HTTP callback is unavailable. OAuth login saves a single physical auth file; multiple projects are kept in `project_ids` and expanded as virtual auths when the file is loaded. After login finalization, the plugin best-effort configures each project for the `EXPERIMENTAL` release channel via the Cloud AI Companion API (`releaseChannelSettings` + `settingBindings`). Login still succeeds if that configuration call fails. OAuth login timeout and polling interval are fixed in code. Proxy handling comes from the host configuration; the plugin has no plugin-specific proxy option.
+Use the host `--no-browser` flag to skip opening the browser automatically during command-line login. After opening the login URL, the command can accept a pasted callback URL when the local HTTP callback is unavailable. OAuth login saves a single physical auth file with the project validated by Code Assist. Without `--geminicli-project-id`, login discovers the account's managed project; it does not select or store unrelated Google Cloud projects. Existing onboarded accounts use their returned managed project without repeating onboarding. Free-tier onboarding omits a project, as required by Code Assist. After login finalization, the plugin best-effort configures each project for the `EXPERIMENTAL` release channel via the Cloud AI Companion API (`releaseChannelSettings` + `settingBindings`). Login still succeeds if that configuration call fails. OAuth login timeout and polling interval are fixed in code. Proxy handling comes from the host configuration; the plugin has no plugin-specific proxy option.
 
 ## Auth Storage
 
@@ -29,13 +29,13 @@ The plugin stores provider-owned auth JSON with `type: "gemini-cli"`. A single p
   "type": "gemini-cli",
   "email": "user@example.com",
   "project_id": "primary-project",
-  "project_ids": ["primary-project", "secondary-project"],
+  "project_ids": ["primary-project"],
   "access_token": "access-token",
   "refresh_token": "refresh-token"
 }
 ```
 
-The first auth is the physical auth. Additional projects are exposed as virtual auths with `metadata.virtual=true`, `metadata.parent_auth_id`, `attributes.project_id`, and `attributes.runtime_only=true`.
+OAuth login writes only the Code Assist project used by the account. Independently provisioned auth storage can list multiple licensed projects in `project_ids`; its first auth is physical, and additional projects are exposed as virtual auths with `metadata.virtual=true`, `metadata.parent_auth_id`, `attributes.project_id`, and `attributes.runtime_only=true`.
 
 ## Upstream Endpoints
 

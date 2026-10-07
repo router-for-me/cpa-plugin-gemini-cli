@@ -32,7 +32,6 @@ const (
 	oauthClientSecret = "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"
 	tokenURL          = "https://oauth2.googleapis.com/token"
 	userInfoURL       = "https://www.googleapis.com/oauth2/v1/userinfo?alt=json"
-	projectsURL       = "https://cloudresourcemanager.googleapis.com/v1/projects"
 	codeAssistBaseURL = "https://cloudcode-pa.googleapis.com"
 	codeAssistVersion = "v1internal"
 	loginTimeout      = 3 * time.Minute
@@ -283,26 +282,15 @@ func (p *Provider) finalizeCode(ctx context.Context, client pluginapi.HostHTTPCl
 		storage.Email = email
 	}
 	projectID := metadataString(metadata, "project_id")
-	projects, errProjects := fetchProjectIDs(ctx, client, token.AccessToken)
-	if errProjects == nil {
-		storage.ProjectIDs = projects
-	}
-	if projectID == "" && len(storage.ProjectIDs) > 0 {
-		projectID = storage.ProjectIDs[0]
-	}
 	if errSetup := setupCodeAssist(ctx, client, &storage, projectID); errSetup != nil {
-		if errProjects != nil && projectID == "" {
-			return nil, fmt.Errorf("fetch gemini-cli project ids: %w; code assist setup: %w", errProjects, errSetup)
-		}
 		return nil, errSetup
-	}
-	if storage.ProjectID == "" && len(storage.ProjectIDs) > 0 {
-		storage.ProjectID = storage.ProjectIDs[0]
 	}
 	if storage.ProjectID == "" {
 		return nil, fmt.Errorf("gemini-cli project_id is required")
 	}
-	storage.ProjectIDs = ensureProjectID(storage.ProjectIDs, storage.ProjectID)
+	// Only the project validated by Code Assist belongs in routing storage.
+	// Cloud Resource Manager membership does not establish a Code Assist license.
+	storage.ProjectIDs = []string{storage.ProjectID}
 	// Best-effort: enable EXPERIMENTAL release channel so preview models work immediately.
 	// Login still succeeds when this Google Cloud API call fails.
 	_ = configurePreviewChannels(ctx, client, storage.AccessToken, storage.ProjectIDs)
@@ -410,25 +398,6 @@ func fetchUserEmail(ctx context.Context, client pluginapi.HostHTTPClient, access
 	return strings.TrimSpace(gjson.GetBytes(resp.Body, "email").String()), nil
 }
 
-func fetchProjectIDs(ctx context.Context, client pluginapi.HostHTTPClient, accessToken string) ([]string, error) {
-	resp, errDo := authedGet(ctx, client, projectsURL, accessToken)
-	if errDo != nil {
-		return nil, errDo
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("project list request failed: status %d", resp.StatusCode)
-	}
-	projects := make([]string, 0)
-	gjson.GetBytes(resp.Body, "projects").ForEach(func(_, item gjson.Result) bool {
-		projectID := strings.TrimSpace(item.Get("projectId").String())
-		if projectID != "" {
-			projects = append(projects, projectID)
-		}
-		return true
-	})
-	return cleanStringList(projects), nil
-}
-
 func setupCodeAssist(ctx context.Context, client pluginapi.HostHTTPClient, storage *Storage, requestedProject string) error {
 	if storage == nil {
 		return fmt.Errorf("gemini-cli auth storage is missing")
@@ -447,82 +416,78 @@ func setupCodeAssist(ctx context.Context, client pluginapi.HostHTTPClient, stora
 	loadReq := map[string]any{"metadata": metadata}
 	if projectID != "" {
 		loadReq["cloudaicompanionProject"] = projectID
+		metadata["duetProject"] = projectID
 	}
 	var loadResp map[string]any
 	if errLoad := callCodeAssist(ctx, client, accessToken, "loadCodeAssist", loadReq, &loadResp); errLoad != nil {
 		return fmt.Errorf("load code assist: %w", errLoad)
 	}
+	if currentTier, ok := loadResp["currentTier"].(map[string]any); ok && currentTier != nil {
+		// Match Gemini CLI's current-tier branch: a returned managed project
+		// takes precedence, while an explicit project is accepted when absent.
+		// https://github.com/google-gemini/gemini-cli/blob/249d51c2631ba1a36b71b0f2c50195abbe4100ce/packages/core/src/code_assist/setup.ts#L198
+		if managedProject := projectIDFromCodeAssistValue(loadResp["cloudaicompanionProject"]); managedProject != "" {
+			projectID = managedProject
+		}
+		if projectID == "" {
+			return fmt.Errorf("gemini-cli current tier has no managed project; an explicit licensed project_id is required")
+		}
+		storage.ProjectID = projectID
+		return nil
+	}
+	if tiers, ok := loadResp["ineligibleTiers"].([]any); ok {
+		for _, rawTier := range tiers {
+			if tier, ok := rawTier.(map[string]any); ok && tier["reasonCode"] == "VALIDATION_REQUIRED" {
+				return fmt.Errorf("gemini-cli account validation is required")
+			}
+		}
+	}
 	tierID := defaultTierID(loadResp)
-	if projectID == "" {
-		projectID = projectIDFromCodeAssistValue(loadResp["cloudaicompanionProject"])
-	}
-	if projectID == "" {
-		discoveredProject, errDiscover := discoverCodeAssistProject(ctx, client, accessToken, tierID, metadata)
-		if errDiscover != nil {
-			return errDiscover
-		}
-		projectID = discoveredProject
-	}
-	if projectID == "" {
-		return fmt.Errorf("gemini-cli project_id is required")
-	}
-	storage.ProjectID = projectID
 	onboardReq := map[string]any{
-		"tierId":                  tierID,
-		"metadata":                metadata,
-		"cloudaicompanionProject": projectID,
-	}
-	for {
-		var onboardResp map[string]any
-		if errOnboard := callCodeAssist(ctx, client, accessToken, "onboardUser", onboardReq, &onboardResp); errOnboard != nil {
-			return fmt.Errorf("onboard user: %w", errOnboard)
-		}
-		if done, okDone := onboardResp["done"].(bool); okDone && done {
-			if resp, okResp := onboardResp["response"].(map[string]any); okResp {
-				if responseProjectID := projectIDFromCodeAssistValue(resp["cloudaicompanionProject"]); responseProjectID != "" {
-					storage.ProjectID = responseProjectID
-				}
-			}
-			if strings.TrimSpace(storage.ProjectID) == "" {
-				storage.ProjectID = projectID
-			}
-			if strings.TrimSpace(storage.ProjectID) == "" {
-				return fmt.Errorf("onboard user completed without project id")
-			}
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(onboardingPoll):
-		}
-	}
-}
-
-func discoverCodeAssistProject(ctx context.Context, client pluginapi.HostHTTPClient, accessToken string, tierID string, metadata map[string]string) (string, error) {
-	req := map[string]any{
 		"tierId":   tierID,
 		"metadata": metadata,
 	}
-	discoverCtx, cancel := context.WithTimeout(ctx, onboardingTimeout)
+	if tierID == "free-tier" {
+		// The free tier owns its managed project and rejects supplied projects.
+		delete(metadata, "duetProject")
+		projectID = ""
+	} else if projectID != "" {
+		onboardReq["cloudaicompanionProject"] = projectID
+	}
+	onboardCtx, cancel := context.WithTimeout(ctx, onboardingTimeout)
 	defer cancel()
+	var onboardResp map[string]any
+	if err := callCodeAssist(onboardCtx, client, accessToken, "onboardUser", onboardReq, &onboardResp); err != nil {
+		return fmt.Errorf("onboard user: %w", err)
+	}
+	operation, _ := onboardResp["name"].(string)
 	for {
-		var onboardResp map[string]any
-		if errOnboard := callCodeAssist(discoverCtx, client, accessToken, "onboardUser", req, &onboardResp); errOnboard != nil {
-			return "", fmt.Errorf("auto-discovery onboardUser: %w", errOnboard)
-		}
 		if done, okDone := onboardResp["done"].(bool); okDone && done {
 			if resp, okResp := onboardResp["response"].(map[string]any); okResp {
-				if projectID := projectIDFromCodeAssistValue(resp["cloudaicompanionProject"]); projectID != "" {
-					return projectID, nil
+				if managedProject := projectIDFromCodeAssistValue(resp["cloudaicompanionProject"]); managedProject != "" {
+					projectID = managedProject
 				}
 			}
-			return "", fmt.Errorf("gemini-cli project_id is required")
+			if projectID == "" {
+				return fmt.Errorf("onboard user completed without project id")
+			}
+			storage.ProjectID = projectID
+			return nil
+		}
+		if !strings.HasPrefix(operation, "operations/") {
+			return fmt.Errorf("onboard user returned an incomplete operation without a valid name")
 		}
 		select {
-		case <-discoverCtx.Done():
-			return "", fmt.Errorf("gemini-cli project_id is required")
+		case <-onboardCtx.Done():
+			// This child context closes for parent cancellation as well as
+			// its own timeout; the timer never blocks that cancellation arm.
+			return onboardCtx.Err()
 		case <-time.After(onboardingPoll):
+		}
+		// Poll the returned operation; never restart account onboarding.
+		onboardResp = nil
+		if err := callCodeAssist(onboardCtx, client, accessToken, operation, nil, &onboardResp); err != nil {
+			return fmt.Errorf("poll onboarding operation: %w", err)
 		}
 	}
 }
@@ -530,8 +495,10 @@ func discoverCodeAssistProject(ctx context.Context, client pluginapi.HostHTTPCli
 func callCodeAssist(ctx context.Context, client pluginapi.HostHTTPClient, accessToken string, endpoint string, body any, result any) error {
 	client = requireHTTPClient(client)
 	url := fmt.Sprintf("%s/%s:%s", codeAssistBaseURL, codeAssistVersion, endpoint)
+	method := http.MethodPost
 	if strings.HasPrefix(endpoint, "operations/") {
-		url = fmt.Sprintf("%s/%s", codeAssistBaseURL, endpoint)
+		url = fmt.Sprintf("%s/%s/%s", codeAssistBaseURL, codeAssistVersion, endpoint)
+		method = http.MethodGet
 	}
 	var rawBody []byte
 	if body != nil {
@@ -542,7 +509,7 @@ func callCodeAssist(ctx context.Context, client pluginapi.HostHTTPClient, access
 		}
 	}
 	resp, errDo := client.Do(ctx, pluginapi.HTTPRequest{
-		Method: http.MethodPost,
+		Method: method,
 		URL:    url,
 		Headers: http.Header{
 			"Accept":            []string{"application/json"},
@@ -598,14 +565,6 @@ func projectIDFromCodeAssistValue(value any) string {
 		}
 	}
 	return ""
-}
-
-func ensureProjectID(projects []string, projectID string) []string {
-	projectID = strings.TrimSpace(projectID)
-	if projectID == "" || containsString(projects, projectID) {
-		return cleanStringList(projects)
-	}
-	return append([]string{projectID}, cleanStringList(projects)...)
 }
 
 func requireHTTPClient(client pluginapi.HostHTTPClient) pluginapi.HostHTTPClient {

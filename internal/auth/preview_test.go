@@ -209,7 +209,11 @@ func (c *loginPollWithPreviewHTTPClient) Do(_ context.Context, req pluginapi.HTT
 		return pluginapi.HTTPResponse{StatusCode: http.StatusNotFound, Body: []byte(`{}`)}, nil
 	}
 
-	// Reuse the same OAuth/Code Assist responses as loginPollHTTPClient.
+	// This preview fixture represents an existing licensed explicit project.
+	if req.URL == codeAssistBaseURL+"/"+codeAssistVersion+":loadCodeAssist" {
+		return pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(`{"currentTier":{"id":"standard-tier"}}`)}, nil
+	}
+	// Reuse the same OAuth responses as loginPollHTTPClient.
 	base := loginPollHTTPClient{}
 	return base.Do(context.Background(), req)
 }

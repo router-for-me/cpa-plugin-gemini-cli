@@ -186,7 +186,7 @@ func TestPollLoginConsumesCallbackPayload(t *testing.T) {
 	}
 }
 
-func TestPollLoginDiscoversProjectWithCodeAssistWhenProjectListFails(t *testing.T) {
+func TestPollLoginDiscoversAccountManagedProjectWithoutExplicitProject(t *testing.T) {
 	authDir := t.TempDir()
 	state := "state-token"
 	callbackPath := callbackPayloadPath(authDir, state)
